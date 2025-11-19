@@ -1,0 +1,18 @@
+from pydantic import BaseModel
+
+from care_odoo.resources.product_category.spec import CategoryData
+
+
+class TaxData(BaseModel):
+    tax_name: str
+    tax_percentage: float
+
+
+class ProductData(BaseModel):
+    product_name: str
+    x_care_id: str
+    cost: float
+    mrp: float
+    category: CategoryData
+    taxes: list[TaxData] | None = None
+    hsn: str | None = None
