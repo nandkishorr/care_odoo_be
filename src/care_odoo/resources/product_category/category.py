@@ -15,9 +15,7 @@ class OdooCategoryResource:
         """
         data = CategoryData(
             category_name=category.title,
-            parent_x_care_id=str(category.parent.external_id)
-            if category.parent
-            else "",
+            parent_x_care_id=str(category.parent.external_id) if category.parent else "",
             x_care_id=str(category.external_id),
         ).model_dump()
 

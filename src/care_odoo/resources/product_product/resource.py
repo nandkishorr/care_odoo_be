@@ -16,8 +16,7 @@ class OdooProductProductResource:
     def get_charge_item_purchase_price(self, charge_item: ChargeItemDefinition):
         for item in charge_item.price_components:
             if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
+                item["monetary_component_type"] == MonetaryComponentType.informational.value
                 and item["code"]["code"] == "purchase_price"
             ):
                 return item["amount"]
@@ -26,8 +25,7 @@ class OdooProductProductResource:
     def get_charge_item_mrp(self, charge_item: ChargeItemDefinition):
         for item in charge_item.price_components:
             if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
+                item["monetary_component_type"] == MonetaryComponentType.informational.value
                 and item["code"]["code"] == "mrp"
             ):
                 return item["amount"]
@@ -40,9 +38,7 @@ class OdooProductProductResource:
                 taxes.append(item)
         return taxes
 
-    def sync_product_to_odoo_api(
-        self, charge_item_definition, hsn: str = ""
-    ) -> int | None:
+    def sync_product_to_odoo_api(self, charge_item_definition, hsn: str = "") -> int | None:
         """
         Synchronize a charge item definition to Odoo as a product.
 
@@ -78,6 +74,7 @@ class OdooProductProductResource:
             ),
             taxes=taxes,
             hsn=hsn,
+            status=charge_item_definition.status,
         ).model_dump()
 
         response = OdooConnector.call_api("api/add/product", data)
@@ -98,8 +95,7 @@ class OdooProductProductResource:
 
         hsn = (
             product.product_knowledge.alternate_identifier
-            if product.product_knowledge
-            and product.product_knowledge.alternate_identifier
+            if product.product_knowledge and product.product_knowledge.alternate_identifier
             else ""
         )
 

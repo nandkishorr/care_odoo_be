@@ -12,6 +12,9 @@ from care_odoo.resources.account_move.spec import (
     AccountMoveApiRequest,
     AccountMoveReturnApiRequest,
     BillType,
+    DiscountGroup,
+    DiscountType,
+    InvoiceDiscounts,
     InvoiceItem,
 )
 from care_odoo.resources.product_category.spec import CategoryData
@@ -31,8 +34,7 @@ class OdooInvoiceResource:
     def get_charge_item_purchase_price(self, charge_item: ChargeItem):
         for item in charge_item.unit_price_components:
             if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
+                item["monetary_component_type"] == MonetaryComponentType.informational.value
                 and item["code"]["code"] == "purchase_price"
             ):
                 return item["amount"]
@@ -41,12 +43,60 @@ class OdooInvoiceResource:
     def get_charge_item_mrp(self, charge_item: ChargeItem):
         for item in charge_item.unit_price_components:
             if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
+                item["monetary_component_type"] == MonetaryComponentType.informational.value
                 and item["code"]["code"] == "mrp"
             ):
                 return item["amount"]
         return None
+
+    def get_first_discount(self, charge_item: ChargeItem) -> InvoiceDiscounts | None:
+        """Extract the first discount from unit and total price components."""
+        if not charge_item.unit_price_components:
+            return None
+
+        # Find the first discount in unit_price_components to get type and rate
+        unit_discount = None
+        for component in charge_item.unit_price_components:
+            if component.get("monetary_component_type") == MonetaryComponentType.discount.value:
+                unit_discount = component
+                break
+
+        if not unit_discount:
+            return None
+
+        code = unit_discount.get("code", {})
+        discount_name = code.get("display")
+        discount_code = code.get("code")
+
+        # Create discount group
+        discount_group = DiscountGroup(x_care_id=discount_code, name=discount_name)
+
+        # Get discount type and rate from unit_price_components
+        if unit_discount.get("factor") is not None:
+            discount_type = DiscountType.factor
+            rate = float(unit_discount.get("factor", 0.0))
+        else:
+            discount_type = DiscountType.amount
+            rate = float(unit_discount.get("amount", 0.0))
+
+        # Get discount amount from total_price_components
+        disc_amt = 0.0
+        if charge_item.total_price_components:
+            for component in charge_item.total_price_components:
+                if (
+                    component.get("monetary_component_type") == MonetaryComponentType.discount.value
+                    and component.get("code", {}).get("code") == discount_code
+                ):
+                    disc_amt = float(component.get("amount", 0.0))
+                    break
+
+        return InvoiceDiscounts(
+            name=discount_name,
+            discount_group=discount_group,
+            discount_type=discount_type,
+            rate=rate,
+            disc_amt=disc_amt,
+        )
 
     def sync_invoice_to_odoo_api(self, invoice_id: str) -> int | None:
         """
@@ -58,9 +108,7 @@ class OdooInvoiceResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        invoice = Invoice.objects.select_related("facility", "patient").get(
-            external_id=invoice_id
-        )
+        invoice = Invoice.objects.select_related("facility", "patient").get(external_id=invoice_id)
 
         # Prepare partner data
         partner_data = PartnerData(
@@ -75,9 +123,7 @@ class OdooInvoiceResource:
 
         # Prepare invoice items
         invoice_items = []
-        for charge_item in ChargeItem.objects.filter(
-            paid_invoice=invoice
-        ).select_related("charge_item_definition"):
+        for charge_item in ChargeItem.objects.filter(paid_invoice=invoice).select_related("charge_item_definition"):
             if charge_item.charge_item_definition:
                 base_price = self.get_charge_item_base_price(charge_item)
                 purchase_price = self.get_charge_item_purchase_price(charge_item)
@@ -88,47 +134,33 @@ class OdooInvoiceResource:
                     cost=float(purchase_price or base_price or "0"),
                     category=CategoryData(
                         category_name=charge_item.charge_item_definition.category.title,
-                        parent_x_care_id=str(
-                            charge_item.charge_item_definition.category.parent.external_id
-                        )
+                        parent_x_care_id=str(charge_item.charge_item_definition.category.parent.external_id)
                         if charge_item.charge_item_definition.category.parent
                         else "",
-                        x_care_id=str(
-                            charge_item.charge_item_definition.category.external_id
-                        ),
+                        x_care_id=str(charge_item.charge_item_definition.category.external_id),
                     ),
+                    status=charge_item.charge_item_definition.status,
                 )
+
+                # Get the first discount if available
+                discount = self.get_first_discount(charge_item)
 
                 item = InvoiceItem(
                     product_data=product_data,
                     quantity=str(charge_item.quantity),
                     sale_price=str(base_price),
                     x_care_id=str(charge_item.external_id),
+                    discounts=discount,
                 )
 
-                if (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.service_request.value
-                ):
-                    service_request = ServiceRequest.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                if charge_item.service_resource == ChargeItemResourceOptions.service_request.value:
+                    service_request = ServiceRequest.objects.get(external_id=charge_item.service_resource_id)
                     requester = service_request.requester
-                elif (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.appointment.value
-                ):
-                    token_booking = TokenBooking.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                elif charge_item.service_resource == ChargeItemResourceOptions.appointment.value:
+                    token_booking = TokenBooking.objects.get(external_id=charge_item.service_resource_id)
                     requester = token_booking.token_slot.resource.user
-                elif (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.medication_dispense.value
-                ):
-                    medication_dispense = MedicationDispense.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                elif charge_item.service_resource == ChargeItemResourceOptions.medication_dispense.value:
+                    medication_dispense = MedicationDispense.objects.get(external_id=charge_item.service_resource_id)
                     requester = (
                         medication_dispense.authorizing_request.requester
                         if medication_dispense.authorizing_request
@@ -166,9 +198,7 @@ class OdooInvoiceResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        invoice = Invoice.objects.select_related("facility", "patient").get(
-            external_id=invoice_id
-        )
+        invoice = Invoice.objects.select_related("facility", "patient").get(external_id=invoice_id)
 
         data = AccountMoveReturnApiRequest(
             x_care_id=str(invoice.external_id),

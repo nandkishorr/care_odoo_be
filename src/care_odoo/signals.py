@@ -83,10 +83,7 @@ def sync_resource_category_to_odoo(sender, instance, created, **kwargs):
     """
     Signal handler to sync resource category to Odoo when created or updated.
     """
-    if (
-        instance.resource_type
-        == ResourceCategoryResourceTypeOptions.charge_item_definition.value
-    ):
+    if instance.resource_type == ResourceCategoryResourceTypeOptions.charge_item_definition.value:
         odoo_category = OdooCategoryResource()
         odoo_category.sync_category_to_odoo_api(instance)
 
@@ -106,10 +103,7 @@ def sync_delivery_order_to_odoo(sender, instance, created, **kwargs):
     """
     Signal handler to sync delivery order to Odoo as a vendor bill when completed.
     """
-    if (
-        instance.status == SupplyDeliveryOrderStatusOptions.completed.value
-        and not instance.origin
-    ):
+    if instance.status == SupplyDeliveryOrderStatusOptions.completed.value and not instance.origin:
         odoo_delivery_order = OdooDeliveryOrderResource()
         odoo_delivery_order.sync_delivery_order_to_odoo_api(instance.external_id)
 

@@ -29,9 +29,9 @@ class OdooPaymentResource:
         Returns:
             Odoo payment ID if successful, None otherwise
         """
-        payment = PaymentReconciliation.objects.select_related(
-            "facility", "account", "target_invoice"
-        ).get(external_id=payment_id)
+        payment = PaymentReconciliation.objects.select_related("facility", "account", "target_invoice").get(
+            external_id=payment_id
+        )
 
         # Prepare partner data
         partner_data = PartnerData(
@@ -46,18 +46,14 @@ class OdooPaymentResource:
 
         # Prepare payment data
         data = AccountMovePaymentApiRequest(
-            journal_x_care_id=str(
-                payment.target_invoice.external_id if payment.target_invoice else ""
-            ),
+            journal_x_care_id=str(payment.target_invoice.external_id if payment.target_invoice else ""),
             x_care_id=str(payment.external_id),
             amount=float(payment.amount),
             journal_input=JournalType.cash
             if payment.method == PaymentReconciliationPaymentMethodOptions.cash.value
             else JournalType.bank,
             payment_date=payment.payment_datetime.strftime("%Y-%m-%d"),
-            payment_mode=PaymentMode.send
-            if payment.is_credit_note
-            else PaymentMode.receive,
+            payment_mode=PaymentMode.send if payment.is_credit_note else PaymentMode.receive,
             partner_data=partner_data,
             customer_type=CustomerType.customer,
             counter_data=BillCounterData(

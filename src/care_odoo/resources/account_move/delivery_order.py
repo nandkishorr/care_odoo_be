@@ -36,8 +36,7 @@ class OdooDeliveryOrderResource:
 
         for item in product.charge_item_definition.price_components:
             if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
+                item["monetary_component_type"] == MonetaryComponentType.informational.value
                 and item["code"]["code"] == "purchase_price"
             ):
                 return item["amount"]
@@ -53,9 +52,9 @@ class OdooDeliveryOrderResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        delivery_order = DeliveryOrder.objects.select_related(
-            "supplier", "destination", "destination__facility"
-        ).get(external_id=delivery_order_id)
+        delivery_order = DeliveryOrder.objects.select_related("supplier", "destination", "destination__facility").get(
+            external_id=delivery_order_id
+        )
 
         # Prepare partner data for supplier
         supplier_metadata = delivery_order.supplier.metadata or {}
@@ -88,20 +87,13 @@ class OdooDeliveryOrderResource:
                 purchase_price = self.get_product_purchase_price(product)
 
                 # Get category data if charge item definition exists
-                if (
-                    product.charge_item_definition
-                    and product.charge_item_definition.category
-                ):
+                if product.charge_item_definition and product.charge_item_definition.category:
                     category_data = CategoryData(
                         category_name=product.charge_item_definition.category.title,
-                        parent_x_care_id=str(
-                            product.charge_item_definition.category.parent.external_id
-                        )
+                        parent_x_care_id=str(product.charge_item_definition.category.parent.external_id)
                         if product.charge_item_definition.category.parent
                         else "",
-                        x_care_id=str(
-                            product.charge_item_definition.category.external_id
-                        ),
+                        x_care_id=str(product.charge_item_definition.category.external_id),
                     )
                 else:
                     category_data = CategoryData(
@@ -111,13 +103,12 @@ class OdooDeliveryOrderResource:
                     )
 
                 product_data = ProductData(
-                    product_name=product.product_knowledge.name
-                    if product.product_knowledge
-                    else "Unknown Product",
+                    product_name=product.product_knowledge.name if product.product_knowledge else "Unknown Product",
                     x_care_id=str(product.external_id),
                     mrp=float(base_price or "0"),
                     cost=float(purchase_price or base_price or "0"),
                     category=category_data,
+                    status=product.charge_item_definition.status,
                 )
 
                 item = InvoiceItem(
