@@ -18,8 +18,9 @@ from care_odoo.resources.account_move.spec import (
     InvoiceItem,
 )
 from care_odoo.resources.product_category.spec import CategoryData
-from care_odoo.resources.product_product.spec import ProductData
+from care_odoo.resources.product_product.spec import ProductData, TaxData
 from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
+from care.emr.models.charge_item_definition import ChargeItemDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,13 @@ class OdooInvoiceResource:
             disc_amt=disc_amt,
         )
 
+    def get_taxes(self, charge_item: ChargeItemDefinition):
+        taxes = []
+        for item in charge_item.price_components:
+            if item["monetary_component_type"] == MonetaryComponentType.tax.value:
+                taxes.append(item)
+        return taxes
+
     def sync_invoice_to_odoo_api(self, invoice_id: str) -> int | None:
         """
         Synchronize a Django invoice to Odoo using the custom addon API.
@@ -127,8 +135,16 @@ class OdooInvoiceResource:
             if charge_item.charge_item_definition:
                 base_price = self.get_charge_item_base_price(charge_item)
                 purchase_price = self.get_charge_item_purchase_price(charge_item)
+                taxes = []
+                for tax in self.get_taxes(charge_item.charge_item_definition):
+                    taxes.append(
+                        TaxData(
+                            tax_name=tax["code"]["display"],
+                            tax_percentage=float(tax["factor"]),
+                        )
+                    )
                 product_data = ProductData(
-                    product_name=charge_item.charge_item_definition.title,
+                    product_name=f"CARE: {charge_item.charge_item_definition.title}",
                     x_care_id=str(charge_item.charge_item_definition.external_id),
                     mrp=float(base_price or "0"),
                     cost=float(purchase_price or base_price or "0"),
@@ -140,6 +156,7 @@ class OdooInvoiceResource:
                         x_care_id=str(charge_item.charge_item_definition.category.external_id),
                     ),
                     status=charge_item.charge_item_definition.status,
+                    taxes=taxes,
                 )
 
                 # Get the first discount if available
