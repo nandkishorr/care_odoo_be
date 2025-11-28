@@ -11,7 +11,7 @@ class OdooProductProductResource:
         for item in charge_item.price_components:
             if item["monetary_component_type"] == MonetaryComponentType.base.value:
                 return item["amount"]
-        raise Exception("Base price not found")
+        return "0"
 
     def get_charge_item_purchase_price(self, charge_item: ChargeItemDefinition):
         for item in charge_item.price_components:
@@ -20,7 +20,7 @@ class OdooProductProductResource:
                 and item["code"]["code"] == "purchase_price"
             ):
                 return item["amount"]
-        return None
+        return "0"
 
     def get_charge_item_mrp(self, charge_item: ChargeItemDefinition):
         for item in charge_item.price_components:
@@ -29,7 +29,7 @@ class OdooProductProductResource:
                 and item["code"]["code"] == "mrp"
             ):
                 return item["amount"]
-        return None
+        return "0"
 
     def get_taxes(self, charge_item: ChargeItemDefinition):
         taxes = []
