@@ -34,7 +34,7 @@ class InvoiceItem(BaseModel):
     sale_price: str = Field(default="0.0")
     x_care_id: str
     agent_id: str | None = None
-    discounts: InvoiceDiscounts | None = None
+    discounts: list[InvoiceDiscounts] | None = None
 
 
 class BillType(str, Enum):
