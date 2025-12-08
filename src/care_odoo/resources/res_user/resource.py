@@ -1,6 +1,6 @@
 from care.users.models import User
 from care_odoo.connector.connector import OdooConnector
-from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
+from care_odoo.resources.res_partner.spec import PartnerData, PartnerStatus, PartnerType
 from care_odoo.resources.res_user.spec import UserData, UserType
 
 
@@ -29,6 +29,7 @@ class OdooUserResource:
             state="kerala",  # Default to Kerala
             email=user.email,
             agent=True,
+            status=PartnerStatus.retired if user.deleted else PartnerStatus.active,
         )
 
         # Create user data
