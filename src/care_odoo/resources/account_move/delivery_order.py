@@ -1,8 +1,6 @@
 import logging
 
-from care.emr.models.charge_item_definition import ChargeItemDefinition
 from care.emr.models.supply_delivery import DeliveryOrder, SupplyDelivery
-from care.emr.resources.common.monetary_component import MonetaryComponentType
 from care.emr.resources.inventory.supply_delivery.spec import (
     SupplyDeliveryStatusOptions,
 )
@@ -15,41 +13,16 @@ from care_odoo.resources.account_move.spec import (
 from care_odoo.resources.product_category.spec import CategoryData
 from care_odoo.resources.product_product.spec import ProductData, TaxData
 from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
+from care_odoo.resources.utils import (
+    get_base_price_from_definition,
+    get_purchase_price_from_definition,
+    get_taxes_from_definition,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OdooDeliveryOrderResource:
-    def get_product_base_price(self, product):
-        """Get base price from charge item definition price components"""
-        if not product.charge_item_definition:
-            return "0"
-
-        for item in product.charge_item_definition.price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.base.value:
-                return item["amount"]
-        return "0"
-
-    def get_product_purchase_price(self, product):
-        """Get purchase price from charge item definition price components"""
-        if not product.charge_item_definition:
-            return None
-
-        for item in product.charge_item_definition.price_components:
-            if (
-                item["monetary_component_type"] == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "purchase_price"
-            ):
-                return item["amount"]
-        return None
-
-    def get_taxes(self, charge_item: ChargeItemDefinition):
-        taxes = []
-        for item in charge_item.price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.tax.value:
-                taxes.append(item)
-        return taxes
-
     def sync_delivery_order_to_odoo_api(self, delivery_order_id: str) -> int | None:
         """
         Synchronize a Django delivery order to Odoo as a vendor bill using the custom addon API.
@@ -91,8 +64,9 @@ class OdooDeliveryOrderResource:
         for supply_delivery in supply_deliveries:
             if supply_delivery.supplied_item:
                 product = supply_delivery.supplied_item
-                base_price = self.get_product_base_price(product)
-                purchase_price = self.get_product_purchase_price(product)
+                charge_item_def = product.charge_item_definition
+                base_price = get_base_price_from_definition(charge_item_def)
+                purchase_price = get_purchase_price_from_definition(charge_item_def)
 
                 # Get category data if charge item definition exists
                 if product.charge_item_definition and product.charge_item_definition.category:
@@ -111,7 +85,7 @@ class OdooDeliveryOrderResource:
                     )
 
                 taxes = []
-                for tax in self.get_taxes(product.charge_item_definition):
+                for tax in get_taxes_from_definition(product.charge_item_definition):
                     taxes.append(
                         TaxData(
                             tax_name=tax["code"]["display"],
@@ -122,8 +96,8 @@ class OdooDeliveryOrderResource:
                 product_data = ProductData(
                     product_name=f"CARE: {product.charge_item_definition.title}",
                     x_care_id=str(product.charge_item_definition.external_id),
-                    mrp=float(base_price or "0"),
-                    cost=float(purchase_price or "0"),
+                    mrp=float(base_price),
+                    cost=float(purchase_price),
                     category=category_data,
                     status=product.charge_item_definition.status,
                     hsn=product.product_knowledge.alternate_identifier
@@ -135,7 +109,7 @@ class OdooDeliveryOrderResource:
                 item = InvoiceItem(
                     product_data=product_data,
                     quantity=str(supply_delivery.supplied_item_quantity or 0),
-                    sale_price=str(purchase_price or base_price or "0"),
+                    sale_price=str(purchase_price),
                     x_care_id=str(supply_delivery.external_id),
                 )
 

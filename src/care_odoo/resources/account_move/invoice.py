@@ -6,111 +6,27 @@ from care.emr.models.medication_dispense import MedicationDispense
 from care.emr.models.scheduling.booking import TokenBooking
 from care.emr.models.service_request import ServiceRequest
 from care.emr.resources.charge_item.spec import ChargeItemResourceOptions
-from care.emr.resources.common.monetary_component import MonetaryComponentType
 from care_odoo.connector.connector import OdooConnector
 from care_odoo.resources.account_move.spec import (
     AccountMoveApiRequest,
     AccountMoveReturnApiRequest,
     BillType,
-    DiscountGroup,
-    DiscountType,
-    InvoiceDiscounts,
     InvoiceItem,
 )
 from care_odoo.resources.product_category.spec import CategoryData
 from care_odoo.resources.product_product.spec import ProductData, TaxData
 from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
-from care.emr.models.charge_item_definition import ChargeItemDefinition
+from care_odoo.resources.utils import (
+    get_all_discounts,
+    get_base_price_from_charge_item,
+    get_purchase_price_from_charge_item,
+    get_taxes_from_definition,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OdooInvoiceResource:
-    def get_charge_item_base_price(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.base.value:
-                return item["amount"]
-        raise Exception("Base price not found")
-
-    def get_charge_item_purchase_price(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if (
-                item["monetary_component_type"] == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "purchase_price"
-            ):
-                return item["amount"]
-        return None
-
-    def get_charge_item_mrp(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if (
-                item["monetary_component_type"] == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "mrp"
-            ):
-                return item["amount"]
-        return None
-
-    def get_all_discounts(self, charge_item: ChargeItem) -> list[InvoiceDiscounts] | None:
-        """Extract all discounts from unit and total price components."""
-        if not charge_item.unit_price_components:
-            return None
-
-        # Find all discounts in unit_price_components
-        unit_discounts = []
-        for component in charge_item.unit_price_components:
-            if component.get("monetary_component_type") == MonetaryComponentType.discount.value:
-                unit_discounts.append(component)
-
-        if not unit_discounts:
-            return None
-
-        discounts = []
-        for unit_discount in unit_discounts:
-            code = unit_discount.get("code", {})
-            discount_name = code.get("display")
-            discount_code = code.get("code")
-
-            # Create discount group
-            discount_group = DiscountGroup(x_care_id=discount_code, name=discount_name)
-
-            # Get discount type and rate from unit_price_components
-            if unit_discount.get("factor") is not None:
-                discount_type = DiscountType.factor
-                rate = float(unit_discount.get("factor", 0.0))
-            else:
-                discount_type = DiscountType.amount
-                rate = float(unit_discount.get("amount", 0.0))
-
-            # Get discount amount from total_price_components
-            disc_amt = 0.0
-            if charge_item.total_price_components:
-                for component in charge_item.total_price_components:
-                    if (
-                        component.get("monetary_component_type") == MonetaryComponentType.discount.value
-                        and component.get("code", {}).get("code") == discount_code
-                    ):
-                        disc_amt = float(component.get("amount", 0.0))
-                        break
-
-            discounts.append(
-                InvoiceDiscounts(
-                    name=discount_name,
-                    discount_group=discount_group,
-                    discount_type=discount_type,
-                    rate=rate,
-                    disc_amt=disc_amt,
-                )
-            )
-
-        return discounts if discounts else None
-
-    def get_taxes(self, charge_item: ChargeItemDefinition):
-        taxes = []
-        for item in charge_item.price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.tax.value:
-                taxes.append(item)
-        return taxes
-
     def sync_invoice_to_odoo_api(self, invoice_id: str) -> int | None:
         """
         Synchronize a Django invoice to Odoo using the custom addon API.
@@ -138,10 +54,10 @@ class OdooInvoiceResource:
         invoice_items = []
         for charge_item in ChargeItem.objects.filter(paid_invoice=invoice).select_related("charge_item_definition"):
             if charge_item.charge_item_definition:
-                base_price = self.get_charge_item_base_price(charge_item)
-                purchase_price = self.get_charge_item_purchase_price(charge_item)
+                base_price = get_base_price_from_charge_item(charge_item, raise_if_not_found=True)
+                purchase_price = get_purchase_price_from_charge_item(charge_item)
                 taxes = []
-                for tax in self.get_taxes(charge_item.charge_item_definition):
+                for tax in get_taxes_from_definition(charge_item.charge_item_definition):
                     taxes.append(
                         TaxData(
                             tax_name=tax["code"]["display"],
@@ -151,8 +67,8 @@ class OdooInvoiceResource:
                 product_data = ProductData(
                     product_name=f"CARE: {charge_item.charge_item_definition.title}",
                     x_care_id=str(charge_item.charge_item_definition.external_id),
-                    mrp=float(base_price or "0"),
-                    cost=float(purchase_price or "0"),
+                    mrp=float(base_price),
+                    cost=float(purchase_price),
                     category=CategoryData(
                         category_name=charge_item.charge_item_definition.category.title,
                         parent_x_care_id=str(charge_item.charge_item_definition.category.parent.external_id)
@@ -165,7 +81,7 @@ class OdooInvoiceResource:
                 )
 
                 # Get all discounts if available
-                discounts = self.get_all_discounts(charge_item)
+                discounts = get_all_discounts(charge_item)
 
                 item = InvoiceItem(
                     product_data=product_data,
