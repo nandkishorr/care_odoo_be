@@ -50,6 +50,10 @@ class AccountMoveApiRequest(BaseModel):
     partner_data: PartnerData
     invoice_items: list[InvoiceItem]
     reason: str
+    insurance_tag: list[str] | None = None
+    payment_method_id: int | None = None
+    ssmm_id: str | None = None
+    created_by: str | None = None
 
 
 # TODO: Remove unused fields after Connector is updated

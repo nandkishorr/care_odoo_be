@@ -8,9 +8,10 @@ from rest_framework.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
+
 class OdooConnector:
     @classmethod
-    def call_api(cls, endpoint: str, data: dict) -> dict:
+    def call_api(cls, endpoint: str, data: dict, method: str = "POST") -> dict:
         """Call a custom Odoo addon API endpoint.
 
         Args:
@@ -32,13 +33,13 @@ class OdooConnector:
         # url = f"http://host.docker.internal:8069/{endpoint}"
 
         url = f"{settings.PLUGIN_CONFIGS['care_odoo']['CARE_ODOO_PROTOCOL']}://{settings.PLUGIN_CONFIGS['care_odoo']['CARE_ODOO_HOST']}"
-        if settings.PLUGIN_CONFIGS['care_odoo']['CARE_ODOO_PORT']:
+        if settings.PLUGIN_CONFIGS["care_odoo"]["CARE_ODOO_PORT"]:
             url += f":{settings.PLUGIN_CONFIGS['care_odoo']['CARE_ODOO_PORT']}"
         url += f"/{endpoint}"
         headers = {
             "Authorization": f"Basic {auth}",
             "Content-Type": "application/json",
-            "db": settings.PLUGIN_CONFIGS['care_odoo']['CARE_ODOO_DATABASE'],
+            "db": settings.PLUGIN_CONFIGS["care_odoo"]["CARE_ODOO_DATABASE"],
         }
 
         # Log curl equivalent for debugging
@@ -51,7 +52,7 @@ class OdooConnector:
             logger.info(e)
 
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response = requests.request(method, url, headers=headers, json=data, timeout=30)
             logger.info("Odoo API Response Status Code: %s", url)
             logger.info("Odoo API Response Status: %s", response.status_code)
             logger.info("Odoo API Raw Response: %s", response.text)

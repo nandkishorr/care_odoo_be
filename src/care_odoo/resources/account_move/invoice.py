@@ -1,5 +1,7 @@
 import logging
 
+from care_odoo.apps import PLUGIN_NAME
+from django.conf import settings
 from care.emr.models.charge_item import ChargeItem
 from care.emr.models.invoice import Invoice
 from care.emr.models.medication_dispense import MedicationDispense
@@ -22,11 +24,22 @@ from care_odoo.resources.utils import (
     get_purchase_price_from_charge_item,
     get_taxes_from_definition,
 )
+from care.emr.resources.base import model_from_cache
+from care.emr.resources.tag.config_spec import TagConfigReadSpec
 
 logger = logging.getLogger(__name__)
 
 
 class OdooInvoiceResource:
+    def render_tags_ids(self, tags: list[str]) -> list[str]:
+        rendered_tags_ids: list[str] = []
+        for tag in tags or []:
+            cached_tag = model_from_cache(TagConfigReadSpec, id=tag)
+            if cached_tag:
+                logger.info("Cached Tag: %s", cached_tag)
+                rendered_tags_ids.append(str(cached_tag["id"]))
+        return rendered_tags_ids
+
     def sync_invoice_to_odoo_api(self, invoice_id: str) -> int | None:
         """
         Synchronize a Django invoice to Odoo using the custom addon API.
@@ -110,8 +123,19 @@ class OdooInvoiceResource:
                 if requester:
                     item.agent_id = str(requester.external_id)
                 invoice_items.append(item)
-
-        logger.info("Invoice Items: %s", invoice_items)
+        patient_official_identifier_id = {settings.PLUGIN_CONFIGS["care_odoo"]["CARE_PATIENT_OFFICIAL_IDENTIFIER"]}
+        if patient_official_identifier_id:
+            ssmm_id_value = next(
+                (
+                    identifier["value"]
+                    for identifier in invoice.patient.instance_identifiers
+                    if identifier["config"] in patient_official_identifier_id
+                ),
+                None,
+            )
+        logger.info("Tags: %s", invoice.account.tags)
+        account_tags = self.render_tags_ids(invoice.account.tags)
+        logger.info("Account Tags: %s", account_tags)
         data = AccountMoveApiRequest(
             partner_data=partner_data,
             invoice_items=invoice_items,
@@ -120,6 +144,12 @@ class OdooInvoiceResource:
             bill_type=BillType.customer,
             due_date=invoice.created_date.strftime("%d-%m-%Y"),
             reason="",
+            payment_method_id=invoice.account.meta[PLUGIN_NAME].get("odoo_payment_method_id")
+            if invoice.account.meta and PLUGIN_NAME in invoice.account.meta
+            else None,
+            created_by=invoice.updated_by.full_name if invoice.updated_by else None,
+            ssmm_id=ssmm_id_value,
+            insurance_tag=account_tags,
         ).model_dump()
         logger.info("Odoo Invoice Data: %s", data)
 
