@@ -132,6 +132,8 @@ class OdooDeliveryOrderResource:
             bill_type=BillType.vendor,
             due_date=delivery_order.created_date.strftime("%d-%m-%Y"),
             reason="",
+            x_created_by=delivery_order.updated_by.full_name if delivery_order.updated_by else None,
+            payment_reference=(delivery_order.extensions or {}).get("payment_reference", "")
         ).model_dump()
 
         logger.info("Odoo Delivery Order Data: %s", data)

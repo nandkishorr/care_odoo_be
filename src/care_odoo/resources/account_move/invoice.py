@@ -149,7 +149,7 @@ class OdooInvoiceResource:
             payment_method_id=invoice.account.meta[PLUGIN_NAME].get("odoo_payment_method_id")
             if invoice.account.meta and PLUGIN_NAME in invoice.account.meta
             else None,
-            created_by=invoice.updated_by.full_name if invoice.updated_by else None,
+            x_created_by=invoice.updated_by.full_name if invoice.updated_by else None,
             x_identifier=x_identifier,
             insurance_tag=account_tags,
         ).model_dump()
