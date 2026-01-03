@@ -17,6 +17,17 @@ from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
 
 logger = logging.getLogger(__name__)
 
+# Mapping from PaymentReconciliationPaymentMethodOptions to JournalType
+PAYMENT_METHOD_TO_JOURNAL_TYPE: dict[str, JournalType] = {
+    PaymentReconciliationPaymentMethodOptions.cash.value: JournalType.cash,  # Cash payment
+    PaymentReconciliationPaymentMethodOptions.ccca.value: JournalType.card,  # Credit card
+    PaymentReconciliationPaymentMethodOptions.cchk.value: JournalType.bank,  # Certified check
+    PaymentReconciliationPaymentMethodOptions.cdac.value: JournalType.bank,  # Checking/debit account
+    PaymentReconciliationPaymentMethodOptions.chck.value: JournalType.bank,  # Check
+    PaymentReconciliationPaymentMethodOptions.ddpo.value: JournalType.bank,  # Direct deposit/payment order
+    PaymentReconciliationPaymentMethodOptions.debc.value: JournalType.bank,  # Debit card
+}
+
 
 class OdooPaymentResource:
     def sync_payment_to_odoo_api(self, payment_id: str) -> int | None:
@@ -49,9 +60,7 @@ class OdooPaymentResource:
             journal_x_care_id=str(payment.target_invoice.external_id if payment.target_invoice else ""),
             x_care_id=str(payment.external_id),
             amount=float(payment.amount),
-            journal_input=JournalType.cash
-            if payment.method == PaymentReconciliationPaymentMethodOptions.cash.value
-            else JournalType.bank,
+            journal_input=PAYMENT_METHOD_TO_JOURNAL_TYPE.get(payment.method, JournalType.bank),
             payment_date=payment.payment_datetime.strftime("%Y-%m-%d"),
             payment_mode=PaymentMode.send if payment.is_credit_note else PaymentMode.receive,
             partner_data=partner_data,
