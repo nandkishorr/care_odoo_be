@@ -100,6 +100,7 @@ class OdooInvoiceResource:
                 item = InvoiceItem(
                     product_data=product_data,
                     quantity=str(charge_item.quantity),
+                    free_qty=str(0),
                     sale_price=str(base_price),
                     x_care_id=str(charge_item.external_id),
                     discounts=discounts,
