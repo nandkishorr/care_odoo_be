@@ -5,8 +5,12 @@ from care.emr.models.invoice import Invoice
 from care.emr.models.medication_dispense import MedicationDispense
 from care.emr.models.scheduling.booking import TokenBooking
 from care.emr.models.service_request import ServiceRequest
+from care.emr.resources.base import model_from_cache
 from care.emr.resources.charge_item.spec import ChargeItemResourceOptions
-from care.emr.resources.common.monetary_component import MonetaryComponentType
+from care.emr.resources.tag.config_spec import TagConfigReadSpec
+from django.conf import settings
+
+from care_odoo.apps import PLUGIN_NAME
 from care_odoo.connector.connector import OdooConnector
 from care_odoo.resources.account_move.spec import (
     AccountMoveApiRequest,
@@ -15,38 +19,27 @@ from care_odoo.resources.account_move.spec import (
     InvoiceItem,
 )
 from care_odoo.resources.product_category.spec import CategoryData
-from care_odoo.resources.product_product.spec import ProductData
+from care_odoo.resources.product_product.spec import ProductData, TaxData
 from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
+from care_odoo.resources.utils import (
+    get_all_discounts,
+    get_base_price_from_charge_item,
+    get_purchase_price_from_charge_item,
+    get_taxes_from_definition,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OdooInvoiceResource:
-    def get_charge_item_base_price(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.base.value:
-                return item["amount"]
-        raise Exception("Base price not found")
-
-    def get_charge_item_purchase_price(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "purchase_price"
-            ):
-                return item["amount"]
-        return None
-
-    def get_charge_item_mrp(self, charge_item: ChargeItem):
-        for item in charge_item.unit_price_components:
-            if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "mrp"
-            ):
-                return item["amount"]
-        return None
+    def render_tags_ids(self, tags: list[str]) -> list[str]:
+        rendered_tags_ids: list[str] = []
+        for tag in tags or []:
+            cached_tag = model_from_cache(TagConfigReadSpec, id=tag)
+            if cached_tag:
+                logger.info("Cached Tag: %s", cached_tag)
+                rendered_tags_ids.append(str(cached_tag["id"]))
+        return rendered_tags_ids
 
     def sync_invoice_to_odoo_api(self, invoice_id: str) -> int | None:
         """
@@ -58,9 +51,7 @@ class OdooInvoiceResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        invoice = Invoice.objects.select_related("facility", "patient").get(
-            external_id=invoice_id
-        )
+        invoice = Invoice.objects.select_related("facility", "patient").get(external_id=invoice_id)
 
         # Prepare partner data
         partner_data = PartnerData(
@@ -68,67 +59,61 @@ class OdooInvoiceResource:
             x_care_id=str(invoice.patient.external_id),
             partner_type=PartnerType.person,
             phone=invoice.patient.phone_number,
-            state=invoice.facility.state or "kerala",
+            state="kerala",
             email="",
             agent=False,
         )
 
         # Prepare invoice items
         invoice_items = []
-        for charge_item in ChargeItem.objects.filter(
-            paid_invoice=invoice
-        ).select_related("charge_item_definition"):
+        for charge_item in ChargeItem.objects.filter(paid_invoice=invoice).select_related("charge_item_definition"):
             if charge_item.charge_item_definition:
-                base_price = self.get_charge_item_base_price(charge_item)
-                purchase_price = self.get_charge_item_purchase_price(charge_item)
+                base_price = get_base_price_from_charge_item(charge_item, raise_if_not_found=True)
+                purchase_price = get_purchase_price_from_charge_item(charge_item)
+                taxes = []
+                for tax in get_taxes_from_definition(charge_item.charge_item_definition):
+                    taxes.append(
+                        TaxData(
+                            tax_name=tax["code"]["display"],
+                            tax_percentage=float(tax["factor"]),
+                        )
+                    )
                 product_data = ProductData(
-                    product_name=charge_item.charge_item_definition.title,
+                    product_name=f"{charge_item.charge_item_definition.title}",
                     x_care_id=str(charge_item.charge_item_definition.external_id),
-                    mrp=float(base_price or "0"),
-                    cost=float(purchase_price or base_price or "0"),
+                    mrp=float(base_price),
+                    cost=float(purchase_price),
                     category=CategoryData(
                         category_name=charge_item.charge_item_definition.category.title,
-                        parent_x_care_id=str(
-                            charge_item.charge_item_definition.category.parent.external_id
-                        )
+                        parent_x_care_id=str(charge_item.charge_item_definition.category.parent.external_id)
                         if charge_item.charge_item_definition.category.parent
                         else "",
-                        x_care_id=str(
-                            charge_item.charge_item_definition.category.external_id
-                        ),
+                        x_care_id=str(charge_item.charge_item_definition.category.external_id),
                     ),
+                    status=charge_item.charge_item_definition.status,
+                    taxes=taxes,
                 )
+
+                # Get all discounts if available
+                discounts = get_all_discounts(charge_item)
 
                 item = InvoiceItem(
                     product_data=product_data,
                     quantity=str(charge_item.quantity),
+                    free_qty=str(0),
                     sale_price=str(base_price),
                     x_care_id=str(charge_item.external_id),
+                    discounts=discounts,
                 )
 
-                if (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.service_request.value
-                ):
-                    service_request = ServiceRequest.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                if charge_item.service_resource == ChargeItemResourceOptions.service_request.value:
+                    service_request = ServiceRequest.objects.get(external_id=charge_item.service_resource_id)
                     requester = service_request.requester
-                elif (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.appointment.value
-                ):
-                    token_booking = TokenBooking.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                elif charge_item.service_resource == ChargeItemResourceOptions.appointment.value:
+                    token_booking = TokenBooking.objects.get(external_id=charge_item.service_resource_id)
                     requester = token_booking.token_slot.resource.user
-                elif (
-                    charge_item.service_resource
-                    == ChargeItemResourceOptions.medication_dispense.value
-                ):
-                    medication_dispense = MedicationDispense.objects.get(
-                        external_id=charge_item.service_resource_id
-                    )
+                elif charge_item.service_resource == ChargeItemResourceOptions.medication_dispense.value:
+                    medication_dispense = MedicationDispense.objects.get(external_id=charge_item.service_resource_id)
                     requester = (
                         medication_dispense.authorizing_request.requester
                         if medication_dispense.authorizing_request
@@ -140,8 +125,19 @@ class OdooInvoiceResource:
                 if requester:
                     item.agent_id = str(requester.external_id)
                 invoice_items.append(item)
-
-        logger.info("Invoice Items: %s", invoice_items)
+        patient_official_identifier_id = {settings.PLUGIN_CONFIGS["care_odoo"]["CARE_PATIENT_OFFICIAL_IDENTIFIER"]}
+        if patient_official_identifier_id:
+            x_identifier = next(
+                (
+                    identifier["value"]
+                    for identifier in invoice.patient.instance_identifiers
+                    if identifier["config"] in patient_official_identifier_id
+                ),
+                None,
+            )
+        logger.info("Tags: %s", invoice.account.tags)
+        account_tags = self.render_tags_ids(invoice.account.tags)
+        logger.info("Account Tags: %s", account_tags)
         data = AccountMoveApiRequest(
             partner_data=partner_data,
             invoice_items=invoice_items,
@@ -150,10 +146,23 @@ class OdooInvoiceResource:
             bill_type=BillType.customer,
             due_date=invoice.created_date.strftime("%d-%m-%Y"),
             reason="",
+            payment_method_id=invoice.account.extensions.get(
+                settings.PLUGIN_CONFIGS["care_odoo"]["CARE_ODOO_ACCOUNT_EXTENSION_NAME"]
+            )
+            if invoice.account.extensions
+            and settings.PLUGIN_CONFIGS["care_odoo"]["CARE_ODOO_ACCOUNT_EXTENSION_NAME"]
+            in invoice.account.extensions.keys()
+            else None,
+            x_created_by=invoice.updated_by.full_name if invoice.updated_by else None,
+            x_identifier=x_identifier,
+            insurance_tag=account_tags,
         ).model_dump()
         logger.info("Odoo Invoice Data: %s", data)
 
         response = OdooConnector.call_api("api/account/move", data)
+        invoice_number = response.get("invoice", {}).get("name")
+        invoice.number = invoice_number
+        invoice.save(update_fields=["number"])
         return response["invoice"]["id"]
 
     def sync_invoice_return_to_odoo_api(self, invoice_id: str) -> int | None:
@@ -166,9 +175,7 @@ class OdooInvoiceResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        invoice = Invoice.objects.select_related("facility", "patient").get(
-            external_id=invoice_id
-        )
+        invoice = Invoice.objects.select_related("facility", "patient").get(external_id=invoice_id)
 
         data = AccountMoveReturnApiRequest(
             x_care_id=str(invoice.external_id),
@@ -177,4 +184,4 @@ class OdooInvoiceResource:
 
         logger.info("Odoo Invoice Return Data: %s", data)
         response = OdooConnector.call_api("api/account/move/return", data)
-        return response["reverse_invoice"]["id"]
+        return response["invoice"]["id"]

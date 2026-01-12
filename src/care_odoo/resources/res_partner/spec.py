@@ -8,6 +8,12 @@ class PartnerType(str, Enum):
     company = "company"
 
 
+class PartnerStatus(str, Enum):
+    active = "active"
+    retired = "retired"
+    draft = "draft"
+
+
 class PartnerData(BaseModel):
     name: str
     x_care_id: str
@@ -17,3 +23,4 @@ class PartnerData(BaseModel):
     partner_type: PartnerType
     agent: bool
     pan: str | None = None
+    status: PartnerStatus | None = None

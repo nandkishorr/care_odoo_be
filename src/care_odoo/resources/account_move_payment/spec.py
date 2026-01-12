@@ -8,6 +8,7 @@ from care_odoo.resources.res_partner.spec import PartnerData
 class JournalType(str, Enum):
     cash = "cash"
     bank = "bank"
+    card = "card"
 
 
 class PaymentMode(str, Enum):
@@ -36,6 +37,7 @@ class AccountMovePaymentApiRequest(BaseModel):
     partner_data: PartnerData
     customer_type: CustomerType
     counter_data: BillCounterData
+    bank_reference: str | None = None
 
 
 class AccountPaymentCancelApiRequest(BaseModel):

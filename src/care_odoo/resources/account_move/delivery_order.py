@@ -1,10 +1,10 @@
 import logging
 
 from care.emr.models.supply_delivery import DeliveryOrder, SupplyDelivery
-from care.emr.resources.common.monetary_component import MonetaryComponentType
 from care.emr.resources.inventory.supply_delivery.spec import (
     SupplyDeliveryStatusOptions,
 )
+
 from care_odoo.connector.connector import OdooConnector
 from care_odoo.resources.account_move.spec import (
     AccountMoveApiRequest,
@@ -12,37 +12,18 @@ from care_odoo.resources.account_move.spec import (
     InvoiceItem,
 )
 from care_odoo.resources.product_category.spec import CategoryData
-from care_odoo.resources.product_product.spec import ProductData
+from care_odoo.resources.product_product.spec import ProductData, TaxData
 from care_odoo.resources.res_partner.spec import PartnerData, PartnerType
+from care_odoo.resources.utils import (
+    get_base_price_from_definition,
+    get_purchase_price_from_definition,
+    get_taxes_from_definition,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OdooDeliveryOrderResource:
-    def get_product_base_price(self, product):
-        """Get base price from charge item definition price components"""
-        if not product.charge_item_definition:
-            return "0"
-
-        for item in product.charge_item_definition.price_components:
-            if item["monetary_component_type"] == MonetaryComponentType.base.value:
-                return item["amount"]
-        return "0"
-
-    def get_product_purchase_price(self, product):
-        """Get purchase price from charge item definition price components"""
-        if not product.charge_item_definition:
-            return None
-
-        for item in product.charge_item_definition.price_components:
-            if (
-                item["monetary_component_type"]
-                == MonetaryComponentType.informational.value
-                and item["code"]["code"] == "purchase_price"
-            ):
-                return item["amount"]
-        return None
-
     def sync_delivery_order_to_odoo_api(self, delivery_order_id: str) -> int | None:
         """
         Synchronize a Django delivery order to Odoo as a vendor bill using the custom addon API.
@@ -53,9 +34,9 @@ class OdooDeliveryOrderResource:
         Returns:
             Odoo invoice ID if successful, None otherwise
         """
-        delivery_order = DeliveryOrder.objects.select_related(
-            "supplier", "destination", "destination__facility"
-        ).get(external_id=delivery_order_id)
+        delivery_order = DeliveryOrder.objects.select_related("supplier", "destination", "destination__facility").get(
+            external_id=delivery_order_id
+        )
 
         # Prepare partner data for supplier
         supplier_metadata = delivery_order.supplier.metadata or {}
@@ -64,7 +45,7 @@ class OdooDeliveryOrderResource:
             x_care_id=str(delivery_order.supplier.external_id),
             partner_type=PartnerType.company,
             phone=supplier_metadata.get("phone", ""),
-            state=supplier_metadata.get("state", "kerala"),
+            state="kerala",
             email=supplier_metadata.get("email", ""),
             agent=False,
         )
@@ -82,26 +63,20 @@ class OdooDeliveryOrderResource:
         )
 
         for supply_delivery in supply_deliveries:
-            if supply_delivery.supplied_item:
+            if supply_delivery.supplied_item and supply_delivery.supplied_item.charge_item_definition:
                 product = supply_delivery.supplied_item
-                base_price = self.get_product_base_price(product)
-                purchase_price = self.get_product_purchase_price(product)
+                charge_item_def = product.charge_item_definition
+                base_price = get_base_price_from_definition(charge_item_def)
+                purchase_price = get_purchase_price_from_definition(charge_item_def)
 
                 # Get category data if charge item definition exists
-                if (
-                    product.charge_item_definition
-                    and product.charge_item_definition.category
-                ):
+                if product.charge_item_definition and product.charge_item_definition.category:
                     category_data = CategoryData(
                         category_name=product.charge_item_definition.category.title,
-                        parent_x_care_id=str(
-                            product.charge_item_definition.category.parent.external_id
-                        )
+                        parent_x_care_id=str(product.charge_item_definition.category.parent.external_id)
                         if product.charge_item_definition.category.parent
                         else "",
-                        x_care_id=str(
-                            product.charge_item_definition.category.external_id
-                        ),
+                        x_care_id=str(product.charge_item_definition.category.external_id),
                     )
                 else:
                     category_data = CategoryData(
@@ -110,26 +85,43 @@ class OdooDeliveryOrderResource:
                         x_care_id="",
                     )
 
+                taxes = []
+                for tax in get_taxes_from_definition(product.charge_item_definition):
+                    taxes.append(
+                        TaxData(
+                            tax_name=tax["code"]["display"],
+                            tax_percentage=float(tax["factor"]),
+                        )
+                    )
+
                 product_data = ProductData(
-                    product_name=product.product_knowledge.name
-                    if product.product_knowledge
-                    else "Unknown Product",
-                    x_care_id=str(product.external_id),
-                    mrp=float(base_price or "0"),
-                    cost=float(purchase_price or base_price or "0"),
+                    product_name=f"{product.charge_item_definition.title}",
+                    x_care_id=str(product.charge_item_definition.external_id),
+                    mrp=float(base_price),
+                    cost=float(purchase_price),
                     category=category_data,
+                    status=product.charge_item_definition.status,
+                    hsn=product.product_knowledge.alternate_identifier
+                    if product.product_knowledge and product.product_knowledge.alternate_identifier
+                    else "",
+                    taxes=taxes,
                 )
 
                 item = InvoiceItem(
                     product_data=product_data,
                     quantity=str(supply_delivery.supplied_item_quantity or 0),
-                    sale_price=str(purchase_price or base_price or "0"),
+                    free_qty=str((supply_delivery.extensions or {}).get("free_quantity", 0)),
+                    sale_price=str(purchase_price),
                     x_care_id=str(supply_delivery.external_id),
                 )
 
                 invoice_items.append(item)
 
         logger.info("Delivery Order Items: %s", invoice_items)
+
+        if not invoice_items:
+            logger.info("No invoice items found for delivery order %s", delivery_order_id)
+            return None
 
         # Prepare final data using our spec with vendor bill type
         data = AccountMoveApiRequest(
@@ -140,6 +132,8 @@ class OdooDeliveryOrderResource:
             bill_type=BillType.vendor,
             due_date=delivery_order.created_date.strftime("%d-%m-%Y"),
             reason="",
+            x_created_by=delivery_order.updated_by.full_name if delivery_order.updated_by else None,
+            payment_reference=(delivery_order.extensions or {}).get("payment_reference", "")
         ).model_dump()
 
         logger.info("Odoo Delivery Order Data: %s", data)

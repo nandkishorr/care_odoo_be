@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 from care.emr.models.charge_item_definition import ChargeItemDefinition
@@ -41,14 +41,36 @@ def sync_user_to_odoo(sender, instance, created, **kwargs):
     odoo_user.sync_user_to_odoo_api(instance)
 
 
+@receiver(pre_save, sender=Invoice)
+def capture_previous_status(sender, instance, **kwargs):
+    """
+    Capture the previous status value before save to access it in post_save signal.
+    """
+    if instance.pk:
+        old_instance = Invoice.objects.get(pk=instance.pk)
+        instance._previous_status = old_instance.status
+    else:
+        instance._previous_status = None
+
+
 @receiver(post_save, sender=Invoice)
 def save_fields_before_update(sender, instance, raw, using, update_fields, **kwargs):
+    # Skip sync if only 'number' field is being updated
+    if update_fields and update_fields == {"number"}:
+        return
+
+    # Access previous status if needed: getattr(instance, "_previous_status", None)
+    # current_status = instance.status
+
     if instance.status in [
         InvoiceStatusOptions.issued.value,
     ]:
         odoo_integration = OdooInvoiceResource()
         odoo_integration.sync_invoice_to_odoo_api(instance.external_id)
-    elif instance.status in INVOICE_CANCELLED_STATUS:
+    elif instance.status in INVOICE_CANCELLED_STATUS and instance._previous_status in [
+        InvoiceStatusOptions.issued.value,
+        InvoiceStatusOptions.balanced.value,
+    ]:
         odoo_integration = OdooInvoiceResource()
         odoo_integration.sync_invoice_return_to_odoo_api(instance.external_id)
 
@@ -83,10 +105,7 @@ def sync_resource_category_to_odoo(sender, instance, created, **kwargs):
     """
     Signal handler to sync resource category to Odoo when created or updated.
     """
-    if (
-        instance.resource_type
-        == ResourceCategoryResourceTypeOptions.charge_item_definition.value
-    ):
+    if instance.resource_type == ResourceCategoryResourceTypeOptions.charge_item_definition.value:
         odoo_category = OdooCategoryResource()
         odoo_category.sync_category_to_odoo_api(instance)
 
@@ -106,10 +125,7 @@ def sync_delivery_order_to_odoo(sender, instance, created, **kwargs):
     """
     Signal handler to sync delivery order to Odoo as a vendor bill when completed.
     """
-    if (
-        instance.status == SupplyDeliveryOrderStatusOptions.completed.value
-        and not instance.origin
-    ):
+    if instance.status == SupplyDeliveryOrderStatusOptions.completed.value and not instance.origin:
         odoo_delivery_order = OdooDeliveryOrderResource()
         odoo_delivery_order.sync_delivery_order_to_odoo_api(instance.external_id)
 
